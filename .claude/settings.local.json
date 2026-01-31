@@ -11,7 +11,11 @@
       "Bash(cat:*)",
       "Bash(echo:*)",
       "Bash(git init:*)",
-      "Bash(git remote add:*)"
+      "Bash(git remote add:*)",
+      "Bash(CriticalTimer)",
+      "Bash(Reactor Status Critical)",
+      "Bash(Timer block for critical emoticon)",
+      "Bash(python:*)"
     ]
   }
 }

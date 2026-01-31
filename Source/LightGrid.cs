@@ -25,6 +25,9 @@ CriticalTimer=Reactor Status Critical
 
 [QuotaManager]
 StatusLCD=Quota Status LCD
+EnableDisassembly=true
+DisassemblerName=Quota Disassembler
+ExcessThreshold=1.5
 
 ; ========== QUOTA LIST ==========
 ; Format: ItemName=Amount
@@ -81,12 +84,31 @@ O2CriticalPercent=25
 DisplayLCD=Inventory List LCD
 ShowZero=false
 SortBy=name
+AutoFontSize=true
+MaxFontSize=1.2
+MinFontSize=0.5
+CategoryHeaders=true
 
 [BatteryStatus]
 Enable=true
 StatusLCD=Battery Status LCD
 WarnPercent=25
 CriticalPercent=10
+
+[SoundAlerts]
+Enable=true
+AlertSound=LightGrid Alert Sound
+
+[TickIntervals]
+; How many ticks between each module run (1 = every rotation, 2 = every other, etc.)
+; Higher values = less CPU usage but slower response
+ReactorKeeper=1
+QuotaManager=2
+DockYoink=1
+InventoryDisplay=3
+GasKeeper=1
+BatteryStatus=1
+SoundAlerts=1
 ";
 
 // ============================================================
@@ -129,9 +151,13 @@ bool reactorBlocksCached = false;
 
 // QuotaManager config
 string quotaStatusLCDName = "Quota Status LCD";
+bool enableDisassembly = true;
+string disassemblerName = "Quota Disassembler";
+float excessThreshold = 1.5f;
 
 // QuotaManager block references
 IMyTextPanel quotaStatusLCD = null;
+IMyAssembler quotaDisassembler = null;
 bool quotaBlocksCached = false;
 
 // QuotaManager working data (reused to avoid allocations)
@@ -157,6 +183,10 @@ List<MyInventoryItem> yoinkItemBuffer = new List<MyInventoryItem>();
 string inventoryDisplayLCDName = "Inventory List LCD";
 bool inventoryShowZero = false;
 string inventorySortBy = "name"; // "name" or "amount"
+bool inventoryAutoFontSize = true;
+float inventoryMaxFontSize = 1.2f;
+float inventoryMinFontSize = 0.5f;
+bool inventoryCategoryHeaders = true;
 
 // InventoryDisplay block references
 IMyTextPanel inventoryDisplayLCD = null;
@@ -164,6 +194,7 @@ bool inventoryBlocksCached = false;
 
 // InventoryDisplay working data
 Dictionary<string, MyFixedPoint> inventoryTotals = new Dictionary<string, MyFixedPoint>();
+Dictionary<string, string> inventoryCategories = new Dictionary<string, string>(); // displayName -> category
 List<MyInventoryItem> inventoryItemBuffer = new List<MyInventoryItem>();
 List<KeyValuePair<string, MyFixedPoint>> inventorySortBuffer = new List<KeyValuePair<string, MyFixedPoint>>();
 
@@ -198,6 +229,40 @@ List<IMyBatteryBlock> batteries = new List<IMyBatteryBlock>();
 IMyTextPanel batteryStatusLCD = null;
 bool batteryBlocksCached = false;
 
+// SoundAlerts config
+bool enableSoundAlerts = true;
+string alertSoundBlockName = "LightGrid Alert Sound";
+
+// SoundAlerts block references
+IMySoundBlock alertSoundBlock = null;
+bool soundAlertBlocksCached = false;
+
+// SoundAlerts state - track critical states for transition detection
+bool currentReactorCritical = false;
+bool currentGasCritical = false;
+bool currentBatteryCritical = false;
+bool lastReactorCritical = false;
+bool lastGasCritical = false;
+bool lastBatteryCritical = false;
+
+// TickIntervals config (how many rotations between each module run)
+int reactorKeeperInterval = 1;
+int quotaManagerInterval = 2;
+int dockYoinkInterval = 1;
+int inventoryDisplayInterval = 3;
+int gasKeeperInterval = 1;
+int batteryStatusInterval = 1;
+int soundAlertsInterval = 1;
+
+// Module tick counters (increment each rotation, reset when module runs)
+int reactorTickCounter = 0;
+int quotaTickCounter = 0;
+int dockYoinkTickCounter = 0;
+int inventoryTickCounter = 0;
+int gasTickCounter = 0;
+int batteryTickCounter = 0;
+int soundAlertsTickCounter = 0;
+
 // ============================================================
 // ENTRY POINT
 // ============================================================
@@ -222,14 +287,65 @@ public void Main(string argument, UpdateType updateSource)
     tickCounter++;
 
     // One job per tick - spread the load
-    switch (tickCounter % 6)
+    // Each module has a configurable interval (higher = runs less often)
+    switch (tickCounter % 7)
     {
-        case 0: RunReactorKeeper(); break;
-        case 1: RunQuotaManager(); break;
-        case 2: RunDockYoink(); break;
-        case 3: RunInventoryDisplay(); break;
-        case 4: RunGasKeeper(); break;
-        case 5: RunBatteryStatus(); break;
+        case 0:
+            reactorTickCounter++;
+            if (reactorTickCounter >= reactorKeeperInterval)
+            {
+                RunReactorKeeper();
+                reactorTickCounter = 0;
+            }
+            break;
+        case 1:
+            quotaTickCounter++;
+            if (quotaTickCounter >= quotaManagerInterval)
+            {
+                RunQuotaManager();
+                quotaTickCounter = 0;
+            }
+            break;
+        case 2:
+            dockYoinkTickCounter++;
+            if (dockYoinkTickCounter >= dockYoinkInterval)
+            {
+                RunDockYoink();
+                dockYoinkTickCounter = 0;
+            }
+            break;
+        case 3:
+            inventoryTickCounter++;
+            if (inventoryTickCounter >= inventoryDisplayInterval)
+            {
+                RunInventoryDisplay();
+                inventoryTickCounter = 0;
+            }
+            break;
+        case 4:
+            gasTickCounter++;
+            if (gasTickCounter >= gasKeeperInterval)
+            {
+                RunGasKeeper();
+                gasTickCounter = 0;
+            }
+            break;
+        case 5:
+            batteryTickCounter++;
+            if (batteryTickCounter >= batteryStatusInterval)
+            {
+                RunBatteryStatus();
+                batteryTickCounter = 0;
+            }
+            break;
+        case 6:
+            soundAlertsTickCounter++;
+            if (soundAlertsTickCounter >= soundAlertsInterval)
+            {
+                RunSoundAlerts();
+                soundAlertsTickCounter = 0;
+            }
+            break;
     }
 }
 
@@ -255,6 +371,22 @@ void HandleCommand(string command)
             string connStatus = yoinkConnector.Status.ToString();
             Echo($"Yoink Connector: {connStatus}");
         }
+
+        // Sound alerts status
+        EnsureSoundAlertBlockCache();
+        Echo($"Alert Sound: {(alertSoundBlock != null ? "Found" : "NOT FOUND")}");
+        Echo($"Critical States: R={currentReactorCritical} G={currentGasCritical} B={currentBatteryCritical}");
+    }
+    else if (command == "intervals")
+    {
+        Echo("=== Tick Intervals ===");
+        Echo($"ReactorKeeper: {reactorKeeperInterval} (counter: {reactorTickCounter})");
+        Echo($"QuotaManager: {quotaManagerInterval} (counter: {quotaTickCounter})");
+        Echo($"DockYoink: {dockYoinkInterval} (counter: {dockYoinkTickCounter})");
+        Echo($"InventoryDisplay: {inventoryDisplayInterval} (counter: {inventoryTickCounter})");
+        Echo($"GasKeeper: {gasKeeperInterval} (counter: {gasTickCounter})");
+        Echo($"BatteryStatus: {batteryStatusInterval} (counter: {batteryTickCounter})");
+        Echo($"SoundAlerts: {soundAlertsInterval} (counter: {soundAlertsTickCounter})");
     }
     else if (command == "debug" || command == "quota")
     {
@@ -365,6 +497,7 @@ void InvalidateCache()
     reactorWarningTimer = null;
     reactorCriticalTimer = null;
     quotaStatusLCD = null;
+    quotaDisassembler = null;
     quotaTargets.Clear();
     yoinkConnector = null;
     yoinkTargetCargo.Clear();
@@ -378,6 +511,8 @@ void InvalidateCache()
     batteries.Clear();
     batteryStatusLCD = null;
     batteryBlocksCached = false;
+    alertSoundBlock = null;
+    soundAlertBlocksCached = false;
     ParseConfig();
 }
 
@@ -451,6 +586,14 @@ void ApplyConfig(string section, string key, string value)
     else if (section == "QuotaManager")
     {
         if (key == "StatusLCD") quotaStatusLCDName = value;
+        else if (key == "EnableDisassembly") enableDisassembly = ParseBool(value);
+        else if (key == "DisassemblerName") disassemblerName = value;
+        else if (key == "ExcessThreshold")
+        {
+            float threshold;
+            if (float.TryParse(value, out threshold) && threshold >= 1.0f)
+                excessThreshold = threshold;
+        }
         else
         {
             // Treat any other key as a quota definition: ItemName=Amount
@@ -472,6 +615,18 @@ void ApplyConfig(string section, string key, string value)
         if (key == "DisplayLCD") inventoryDisplayLCDName = value;
         else if (key == "ShowZero") inventoryShowZero = ParseBool(value);
         else if (key == "SortBy") inventorySortBy = value.ToLower();
+        else if (key == "AutoFontSize") inventoryAutoFontSize = ParseBool(value);
+        else if (key == "CategoryHeaders") inventoryCategoryHeaders = ParseBool(value);
+        else if (key == "MaxFontSize")
+        {
+            float val;
+            if (float.TryParse(value, out val) && val > 0) inventoryMaxFontSize = val;
+        }
+        else if (key == "MinFontSize")
+        {
+            float val;
+            if (float.TryParse(value, out val) && val > 0) inventoryMinFontSize = val;
+        }
     }
     else if (section == "GasKeeper")
     {
@@ -491,6 +646,29 @@ void ApplyConfig(string section, string key, string value)
         else if (key == "StatusLCD") batteryStatusLCDName = value;
         else if (key == "WarnPercent") int.TryParse(value, out batteryWarnPercent);
         else if (key == "CriticalPercent") int.TryParse(value, out batteryCriticalPercent);
+    }
+    else if (section == "SoundAlerts")
+    {
+        if (key == "Enable") enableSoundAlerts = ParseBool(value);
+        else if (key == "AlertSound") alertSoundBlockName = value;
+    }
+    else if (section == "TickIntervals")
+    {
+        int interval;
+        if (key == "ReactorKeeper" && int.TryParse(value, out interval) && interval >= 1)
+            reactorKeeperInterval = interval;
+        else if (key == "QuotaManager" && int.TryParse(value, out interval) && interval >= 1)
+            quotaManagerInterval = interval;
+        else if (key == "DockYoink" && int.TryParse(value, out interval) && interval >= 1)
+            dockYoinkInterval = interval;
+        else if (key == "InventoryDisplay" && int.TryParse(value, out interval) && interval >= 1)
+            inventoryDisplayInterval = interval;
+        else if (key == "GasKeeper" && int.TryParse(value, out interval) && interval >= 1)
+            gasKeeperInterval = interval;
+        else if (key == "BatteryStatus" && int.TryParse(value, out interval) && interval >= 1)
+            batteryStatusInterval = interval;
+        else if (key == "SoundAlerts" && int.TryParse(value, out interval) && interval >= 1)
+            soundAlertsInterval = interval;
     }
 }
 
@@ -596,11 +774,13 @@ void RunReactorKeeper()
     {
         status = "Chillin";
         emoteTimer = reactorHappyTimer;
+        currentReactorCritical = false;
     }
     else if (avgUranium > reactorMin)
     {
         status = "Getting Low - Mine Soon";
         emoteTimer = reactorWarningTimer;
+        currentReactorCritical = false;
     }
     else
     {
@@ -608,11 +788,13 @@ void RunReactorKeeper()
         {
             status = "GO MINE YOU FOOL";
             emoteTimer = reactorCriticalTimer;
+            currentReactorCritical = true;
         }
         else
         {
             status = "Getting Low - Mine Soon";
             emoteTimer = reactorWarningTimer;
+            currentReactorCritical = false;
         }
     }
 
@@ -812,10 +994,12 @@ void RunQuotaManager()
     // Build status output and queue production
     sb.Clear();
     sb.AppendLine("=== Quota Status ===");
+    int lineCount = 1;
 
     bool allMet = true;
     bool anyCanProduce = false;
-    bool anyBlocked = false;
+    bool anyBlocked = false;      // Missing materials (critical)
+    bool anyUnavailable = false;  // No blueprint (not critical)
 
     foreach (var kvp in quotaTargets)
     {
@@ -833,8 +1017,28 @@ void RunQuotaManager()
 
         if (needed <= 0)
         {
-            // Quota met
-            sb.AppendLine($"{itemName}: {currentInt}/{target} [OK]");
+            // Quota met - check if we have excess to disassemble
+            int excessLimit = (int)(target * excessThreshold);
+
+            if (enableDisassembly && quotaDisassembler != null && currentInt > excessLimit)
+            {
+                // We have excess - move to disassembler
+                int excess = currentInt - target;
+                int moved = MoveToDisassembler(itemName, excess);
+                if (moved > 0)
+                {
+                    sb.AppendLine($"{itemName}: {currentInt}/{target} [EXCESS -> DISASSEMBLE]");
+                }
+                else
+                {
+                    sb.AppendLine($"{itemName}: {currentInt}/{target} [EXCESS]");
+                }
+            }
+            else
+            {
+                sb.AppendLine($"{itemName}: {currentInt}/{target} [OK]");
+            }
+            lineCount++;
             continue;
         }
 
@@ -845,7 +1049,7 @@ void RunQuotaManager()
 
         if (missingMaterial != null)
         {
-            // Can't produce - missing materials
+            // Can't produce - missing materials (CRITICAL)
             sb.AppendLine($"{itemName}: {currentInt}/{target} [NEED {missingMaterial}]");
             anyBlocked = true;
         }
@@ -860,22 +1064,44 @@ void RunQuotaManager()
             }
             else
             {
-                sb.AppendLine($"{itemName}: {currentInt}/{target} [NO BLUEPRINT]");
-                anyBlocked = true;
+                // No blueprint available - not critical, just unavailable
+                sb.AppendLine($"{itemName}: {currentInt}/{target} [UNAVAILABLE]");
+                anyUnavailable = true;
             }
         }
+        lineCount++;
     }
 
     // Clear assembler outputs to cargo
     ClearAssemblerOutputs();
 
-    // Update status LCD with color
+    // Update status LCD with color and auto font size
     if (quotaStatusLCD != null)
     {
         quotaStatusLCD.ContentType = ContentType.TEXT_AND_IMAGE;
         quotaStatusLCD.WriteText(sb.ToString());
 
+        // Auto font size based on content and LCD size
+        if (lineCount > 0)
+        {
+            Vector2 surfaceSize = quotaStatusLCD.SurfaceSize;
+            float baseLineHeight = 28.8f;
+            float lcdCapacity = surfaceSize.Y / baseLineHeight;
+            float targetLines = lineCount + 1;
+            float idealFontSize = lcdCapacity / targetLines;
+
+            // Clamp to reasonable range
+            if (idealFontSize > 1.2f) idealFontSize = 1.2f;
+            if (idealFontSize < 0.5f) idealFontSize = 0.5f;
+
+            quotaStatusLCD.FontSize = idealFontSize;
+        }
+
         // Set background color based on status
+        // GREEN: All quotas met (within threshold)
+        // YELLOW: Items queued OR items unavailable (no blueprint)
+        // ORANGE: Some producing, some blocked by missing materials
+        // RED: Items below quota AND can't produce (missing ingots)
         if (allMet)
         {
             // GREEN - all quotas met
@@ -884,19 +1110,25 @@ void RunQuotaManager()
         }
         else if (anyCanProduce && !anyBlocked)
         {
-            // YELLOW - all needed items are queued and producing
+            // YELLOW - items queued and producing (may have some unavailable)
             quotaStatusLCD.BackgroundColor = new Color(120, 100, 0);
             quotaStatusLCD.FontColor = Color.White;
         }
-        else if (anyCanProduce)
+        else if (anyUnavailable && !anyBlocked && !anyCanProduce)
         {
-            // ORANGE - some producing, some blocked
+            // YELLOW - only unavailable items (no blueprint), nothing critical
+            quotaStatusLCD.BackgroundColor = new Color(120, 100, 0);
+            quotaStatusLCD.FontColor = Color.White;
+        }
+        else if (anyCanProduce && anyBlocked)
+        {
+            // ORANGE - some producing, some blocked by missing materials
             quotaStatusLCD.BackgroundColor = new Color(120, 60, 0);
             quotaStatusLCD.FontColor = Color.White;
         }
         else
         {
-            // RED - nothing can be produced
+            // RED - items need materials we don't have
             quotaStatusLCD.BackgroundColor = new Color(120, 0, 0);
             quotaStatusLCD.FontColor = Color.White;
         }
@@ -909,9 +1141,27 @@ void EnsureQuotaBlockCache()
 
     quotaStatusLCD = GridTerminalSystem.GetBlockWithName(quotaStatusLCDName) as IMyTextPanel;
 
+    // Find the disassembler by name (must be set to Disassembly mode)
+    if (enableDisassembly)
+    {
+        IMyAssembler asm = GridTerminalSystem.GetBlockWithName(disassemblerName) as IMyAssembler;
+        if (asm != null && asm.Mode == MyAssemblerMode.Disassembly)
+        {
+            quotaDisassembler = asm;
+        }
+        else
+        {
+            quotaDisassembler = null;
+        }
+    }
+
     quotaBlocksCached = true;
 
     Echo($"Quota Status LCD '{quotaStatusLCDName}': {(quotaStatusLCD != null ? "Found" : "NOT FOUND")}");
+    if (enableDisassembly)
+    {
+        Echo($"Disassembler '{disassemblerName}': {(quotaDisassembler != null ? "Found" : "NOT FOUND or not in Disassembly mode")}");
+    }
     Echo($"Quotas configured: {quotaTargets.Count}");
 }
 
@@ -1008,43 +1258,15 @@ string NormalizeItemName(string input)
 
 void CountInventory()
 {
-    // Count items in all cargo containers on main grid
+    // Count items in CARGO CONTAINERS ONLY for quota purposes
+    // DO NOT count assembler/disassembler inventories - causes infinite loops!
+    // Items being produced/destroyed should not affect quota calculations
     for (int i = 0; i < cargoContainers.Count; i++)
     {
         IMyCargoContainer cargo = cargoContainers[i];
         if (cargo == null || !cargo.IsFunctional) continue;
 
         IMyInventory inv = cargo.GetInventory(0);
-        if (inv == null) continue;
-
-        quotaItemBuffer.Clear();
-        inv.GetItems(quotaItemBuffer);
-
-        for (int j = 0; j < quotaItemBuffer.Count; j++)
-        {
-            MyInventoryItem item = quotaItemBuffer[j];
-            string displayName = GetItemDisplayName(item.Type);
-
-            if (inventoryCounts.ContainsKey(displayName))
-            {
-                inventoryCounts[displayName] += item.Amount;
-            }
-            else
-            {
-                inventoryCounts[displayName] = item.Amount;
-            }
-        }
-    }
-
-    // Also count assembler output inventories - ONLY assemblers in Assembly mode
-    // Don't count disassemblers as those items are being destroyed
-    for (int i = 0; i < assemblers.Count; i++)
-    {
-        IMyAssembler asm = assemblers[i];
-        if (asm == null || !asm.IsFunctional) continue;
-        if (asm.Mode != MyAssemblerMode.Assembly) continue; // Skip disassemblers
-
-        IMyInventory inv = asm.GetInventory(1); // Output inventory
         if (inv == null) continue;
 
         quotaItemBuffer.Clear();
@@ -1144,7 +1366,7 @@ string GetBlueprintSubtype(string displayName)
         case "Power Cell": return "PowerCell";
         case "Medical": return "MedicalComponent";
         case "Gravity Comp": return "GravityGeneratorComponent";
-        case "Superconductor": return "SuperconductorComponent";
+        case "Superconductor": return "Superconductor";
         case "Thruster Comp": return "ThrustComponent";
         case "Reactor Comp": return "ReactorComponent";
         case "Explosives": return "ExplosivesComponent";
@@ -1353,6 +1575,121 @@ int QueueProduction(IMyAssembler assembler, string displayName, int amount)
     return alreadyQueuedInt;
 }
 
+int MoveToDisassembler(string displayName, int amount)
+{
+    // Move excess items from cargo to the disassembler's input inventory AND queue disassembly
+    if (quotaDisassembler == null || amount <= 0) return 0;
+
+    IMyInventory disassemblerInv = quotaDisassembler.GetInventory(0); // Input inventory
+    if (disassemblerInv == null) return 0;
+
+    // Get the item type we're looking for
+    MyItemType targetType = GetItemTypeFromDisplayName(displayName);
+    if (targetType.TypeId == "") return 0;
+
+    // Get blueprint for disassembly queue
+    string blueprintSubtype = GetBlueprintSubtype(displayName);
+    MyDefinitionId blueprintId;
+    if (!MyDefinitionId.TryParse($"MyObjectBuilder_BlueprintDefinition/{blueprintSubtype}", out blueprintId))
+    {
+        return 0;
+    }
+
+    // Check if disassembler can use this blueprint
+    if (!quotaDisassembler.CanUseBlueprint(blueprintId))
+    {
+        return 0;
+    }
+
+    int totalMoved = 0;
+    int remaining = amount;
+
+    // Search cargo containers for this item
+    for (int i = 0; i < cargoContainers.Count; i++)
+    {
+        if (remaining <= 0) break;
+
+        IMyCargoContainer cargo = cargoContainers[i];
+        if (cargo == null || !cargo.IsFunctional) continue;
+
+        // Skip uranium storage - don't disassemble from there
+        if (IsInUraniumStorage(cargo)) continue;
+
+        IMyInventory cargoInv = cargo.GetInventory(0);
+        if (cargoInv == null) continue;
+
+        quotaItemBuffer.Clear();
+        cargoInv.GetItems(quotaItemBuffer);
+
+        for (int j = quotaItemBuffer.Count - 1; j >= 0; j--)
+        {
+            if (remaining <= 0) break;
+
+            MyInventoryItem item = quotaItemBuffer[j];
+            if (item.Type != targetType) continue;
+
+            // Calculate how much to transfer
+            int available = (int)(float)item.Amount;
+            int toTransfer = available < remaining ? available : remaining;
+
+            // Transfer to disassembler
+            if (cargoInv.TransferItemTo(disassemblerInv, item, (MyFixedPoint)toTransfer))
+            {
+                totalMoved += toTransfer;
+                remaining -= toTransfer;
+            }
+        }
+    }
+
+    // Queue disassembly job for everything we moved
+    if (totalMoved > 0)
+    {
+        quotaDisassembler.AddQueueItem(blueprintId, (MyFixedPoint)totalMoved);
+    }
+
+    return totalMoved;
+}
+
+MyItemType GetItemTypeFromDisplayName(string displayName)
+{
+    // Convert display name back to MyItemType for searching inventory
+    // Most components use MyObjectBuilder_Component
+    string subtypeId = "";
+
+    switch (displayName)
+    {
+        case "Construction Comp": subtypeId = "Construction"; break;
+        case "Computer": subtypeId = "Computer"; break;
+        case "Metal Grid": subtypeId = "MetalGrid"; break;
+        case "Steel Plate": subtypeId = "SteelPlate"; break;
+        case "Interior Plate": subtypeId = "InteriorPlate"; break;
+        case "Small Tube": subtypeId = "SmallTube"; break;
+        case "Large Tube": subtypeId = "LargeTube"; break;
+        case "Motor": subtypeId = "Motor"; break;
+        case "Display": subtypeId = "Display"; break;
+        case "Bulletproof Glass": subtypeId = "BulletproofGlass"; break;
+        case "Girder": subtypeId = "Girder"; break;
+        case "Radio Comm": subtypeId = "RadioCommunication"; break;
+        case "Detector": subtypeId = "Detector"; break;
+        case "Solar Cell": subtypeId = "SolarCell"; break;
+        case "Power Cell": subtypeId = "PowerCell"; break;
+        case "Medical": subtypeId = "Medical"; break;
+        case "Gravity Comp": subtypeId = "GravityGenerator"; break;
+        case "Superconductor": subtypeId = "Superconductor"; break;
+        case "Thruster Comp": subtypeId = "Thrust"; break;
+        case "Reactor Comp": subtypeId = "Reactor"; break;
+        case "Explosives": subtypeId = "Explosives"; break;
+        case "Canvas": subtypeId = "Canvas"; break;
+        case "Zone Chip": subtypeId = "ZoneChip"; break;
+        default:
+            // For mods or unknown items, try removing spaces
+            subtypeId = displayName.Replace(" ", "");
+            break;
+    }
+
+    return new MyItemType("MyObjectBuilder_Component", subtypeId);
+}
+
 // ============================================================
 // MODULE: DOCK & YOINK
 // ============================================================
@@ -1520,6 +1857,7 @@ void RunInventoryDisplay()
 
     // Clear and count all inventory
     inventoryTotals.Clear();
+    inventoryCategories.Clear();
     CountAllInventory();
 
     // Sort the inventory
@@ -1545,19 +1883,98 @@ void RunInventoryDisplay()
 
     // Build display output
     sb.Clear();
-    sb.AppendLine("=== Main Grid Inventory ===");
-    sb.AppendLine();
+    int lineCount = 0;
 
-    for (int i = 0; i < inventorySortBuffer.Count; i++)
+    if (inventoryCategoryHeaders)
     {
-        string name = inventorySortBuffer[i].Key;
-        int amount = (int)(float)inventorySortBuffer[i].Value;
-        sb.AppendLine($"{name}: {FormatNumber(amount)}");
+        // Group by category
+        lineCount = BuildCategoryDisplay();
+    }
+    else
+    {
+        // Simple flat list
+        sb.AppendLine("=== Main Grid Inventory ===");
+        sb.AppendLine();
+        lineCount = 2;
+
+        for (int i = 0; i < inventorySortBuffer.Count; i++)
+        {
+            string name = inventorySortBuffer[i].Key;
+            int amount = (int)(float)inventorySortBuffer[i].Value;
+            sb.AppendLine($"{name}: {FormatNumber(amount)}");
+            lineCount++;
+        }
+    }
+
+    // Apply auto font size if enabled
+    if (inventoryAutoFontSize && lineCount > 0)
+    {
+        // Get LCD surface size to determine capacity
+        // Base line height is ~28.8 pixels at font size 1.0 (monospace font)
+        Vector2 surfaceSize = inventoryDisplayLCD.SurfaceSize;
+        float baseLineHeight = 28.8f;
+
+        // Calculate how many lines fit at font size 1.0
+        float lcdCapacityAtSize1 = surfaceSize.Y / baseLineHeight;
+
+        // Add padding for margins
+        float targetLines = lineCount + 1;
+
+        // Calculate ideal font size
+        float idealFontSize = lcdCapacityAtSize1 / targetLines;
+
+        // Clamp to configured range
+        if (idealFontSize > inventoryMaxFontSize) idealFontSize = inventoryMaxFontSize;
+        if (idealFontSize < inventoryMinFontSize) idealFontSize = inventoryMinFontSize;
+
+        inventoryDisplayLCD.FontSize = idealFontSize;
+
+        // Debug output
+        Echo($"Inventory: {lineCount} lines, LCD capacity ~{lcdCapacityAtSize1:F0}, font {idealFontSize:F2}");
     }
 
     // Write to LCD
     inventoryDisplayLCD.ContentType = ContentType.TEXT_AND_IMAGE;
     inventoryDisplayLCD.WriteText(sb.ToString());
+}
+
+int BuildCategoryDisplay()
+{
+    // Category display order
+    string[] categoryOrder = { "Ores", "Ingots", "Components", "Tools", "Ammo", "Bottles", "Other" };
+    int lineCount = 0;
+
+    for (int c = 0; c < categoryOrder.Length; c++)
+    {
+        string category = categoryOrder[c];
+
+        // Collect items in this category
+        bool hasItems = false;
+        for (int i = 0; i < inventorySortBuffer.Count; i++)
+        {
+            string name = inventorySortBuffer[i].Key;
+            string itemCat;
+            if (!inventoryCategories.TryGetValue(name, out itemCat)) itemCat = "Other";
+
+            if (itemCat == category)
+            {
+                // Print header on first item
+                if (!hasItems)
+                {
+                    if (lineCount > 0) { sb.AppendLine(); lineCount++; }
+                    sb.AppendLine($"=== {category} ===");
+                    lineCount++;
+                    hasItems = true;
+                }
+
+                int amount = (int)(float)inventorySortBuffer[i].Value;
+                sb.AppendLine($"{name}: {FormatNumber(amount)}");
+                lineCount++;
+            }
+        }
+    }
+
+    return lineCount;
 }
 
 void EnsureInventoryBlockCache()
@@ -1631,8 +2048,23 @@ void CountInventoryFrom(IMyInventory inv)
         else
         {
             inventoryTotals[displayName] = item.Amount;
+            // Track category for this item
+            inventoryCategories[displayName] = GetItemCategory(item.Type.TypeId);
         }
     }
+}
+
+string GetItemCategory(string typeId)
+{
+    // Categorize items by their TypeId
+    if (typeId.EndsWith("Ore")) return "Ores";
+    if (typeId.EndsWith("Ingot")) return "Ingots";
+    if (typeId.EndsWith("Component")) return "Components";
+    if (typeId.EndsWith("PhysicalGunObject")) return "Tools";
+    if (typeId.EndsWith("AmmoMagazine")) return "Ammo";
+    if (typeId.EndsWith("GasContainerObject")) return "Bottles";
+    if (typeId.EndsWith("OxygenContainerObject")) return "Bottles";
+    return "Other";
 }
 
 string FormatNumber(int number)
@@ -1699,6 +2131,9 @@ void RunGasKeeper()
     // Determine overall status (worst of the two)
     bool isCritical = h2Status == "CRITICAL" || o2Status == "CRITICAL";
     bool isWarning = h2Status == "WARNING" || o2Status == "WARNING";
+
+    // Update critical state for sound alerts
+    currentGasCritical = isCritical;
 
     // Select timer for emote
     IMyTimerBlock emoteTimer;
@@ -1991,7 +2426,10 @@ void UpdateBatteryLCD(int batteryCount, float chargePercent, float stored, float
     batteryStatusLCD.WriteText(sb.ToString());
 
     // Set background color based on charge level and charging state
-    if (chargePercent <= batteryCriticalPercent && !isCharging)
+    bool isBatteryCritical = chargePercent <= batteryCriticalPercent && !isCharging;
+    currentBatteryCritical = isBatteryCritical;
+
+    if (isBatteryCritical)
     {
         // Critical - low and draining
         batteryStatusLCD.BackgroundColor = new Color(120, 0, 0); // Red
@@ -2037,6 +2475,51 @@ string FormatTime(float hours)
     }
 
     return $"{h}h {m:D2}m";
+}
+
+// ============================================================
+// MODULE: SOUND ALERTS
+// ============================================================
+
+void RunSoundAlerts()
+{
+    if (!enableSoundAlerts) return;
+
+    EnsureSoundAlertBlockCache();
+
+    if (alertSoundBlock == null) return;
+
+    // Check if any system is currently critical
+    bool wasAnyCritical = lastReactorCritical || lastGasCritical || lastBatteryCritical;
+    bool isAnyCritical = currentReactorCritical || currentGasCritical || currentBatteryCritical;
+
+    // Transition TO critical - play sound
+    if (isAnyCritical && !wasAnyCritical)
+    {
+        alertSoundBlock.Play();
+    }
+
+    // Transition FROM critical (recovered) - stop sound
+    if (!isAnyCritical && wasAnyCritical)
+    {
+        alertSoundBlock.Stop();
+    }
+
+    // Update last states for next check
+    lastReactorCritical = currentReactorCritical;
+    lastGasCritical = currentGasCritical;
+    lastBatteryCritical = currentBatteryCritical;
+}
+
+void EnsureSoundAlertBlockCache()
+{
+    if (soundAlertBlocksCached) return;
+
+    alertSoundBlock = GridTerminalSystem.GetBlockWithName(alertSoundBlockName) as IMySoundBlock;
+
+    soundAlertBlocksCached = true;
+
+    Echo($"Alert Sound '{alertSoundBlockName}': {(alertSoundBlock != null ? "Found" : "NOT FOUND")}");
 }
 
 // ============================================================
