@@ -1,60 +1,80 @@
 # LightGrid
 
-A lightweight Space Engineers inventory management script. An alternative to ISY that doesn't hammer your server.
+**Lightweight Space Engineers Base Management**
 
-## Why?
-
-ISY (Isy's Inventory Manager) is feature-rich but performance-heavy. It scans every inventory, every tick, across all grids, and does complex sorting operations constantly. On multiplayer servers, this adds up.
-
-LightGrid takes a different approach:
-- **One job per tick** - spread the work, no frame drops
-- **Main grid only** - subgrids manage themselves
-- **No sorting** - you have a search bar, use it
-- **Simple displays** - text lists, no fancy graphics
+A performance-friendly alternative to ISY that doesn't hammer servers. One job per tick, no lag, no drama.
 
 ## Features
 
-### Phase 1 (Core)
-- **Reactor Keeper** - Keep reactors fed with uranium, emoticon status display
-- **Quota Manager** - Read quotas from an LCD, queue assembler production
-- **Dock & Yoink** - Auto-grab cargo when ships connect
-- **Inventory Display** - Simple "what have I got" list
+| Module | What It Does |
+|--------|--------------|
+| **Reactor Keeper** | Keeps reactors topped up with uranium, warns when low |
+| **Quota Manager** | Auto-crafts components to target amounts, disassembles excess |
+| **Dock & Yoink** | Grabs cargo from ships when they dock |
+| **Inventory Display** | Shows what you've got on an LCD |
+| **Gas Keeper** | Monitors H2/O2 levels with warnings |
+| **Battery Status** | Tracks charge level and time estimates |
+| **Sound Alerts** | Plays alarm when systems go critical |
 
-### Phase 2 (Extended)
-- Gas Keeper (H2/O2 monitoring)
-- Battery Status with time estimates
-- Sound Alerts on state change
-- Configurable tick intervals per module
+## Quick Start
 
-## Usage
+1. **Place a Programmable Block** on your main grid
+2. **Paste the script** from `Source/LightGrid.cs`
+3. **Edit Custom Data** to configure block names and quotas
+4. **Run the script** - it handles the rest
 
-1. Place a Programmable Block
-2. Load the script
-3. Configure Custom Data (template provided)
-4. Name your blocks to match config
-5. Recompile and run
+The script writes default config to Custom Data on first run. Edit it to match your block names.
 
-## Configuration
+## Documentation
 
-All settings are in the Programmable Block's Custom Data. See `Docs/LightGrid-Spec.md` for full documentation.
+- [Setup Guide](Docs/SETUP.md) - Detailed installation and block setup
+- [Configuration Reference](Docs/CONFIGURATION.md) - All config options explained
+- [Troubleshooting](Docs/TROUBLESHOOTING.md) - Common issues and fixes
+
+## Why LightGrid?
+
+ISY is powerful but hammers server performance. LightGrid takes a different approach:
+
+- **One job per tick** - spreads work across multiple ticks
+- **Main grid only** - ignores subgrid complexity
+- **Block caching** - finds blocks once, reuses references
+- **No LINQ** - avoids garbage collection spikes
+- **Configurable intervals** - slow down modules that don't need speed
+
+The result: smooth performance even on multiplayer servers.
+
+## Console Commands
+
+Run these via the Programmable Block's argument field:
+
+| Command | Description |
+|---------|-------------|
+| `refresh` | Re-scan all blocks |
+| `status` | Show block counts |
+| `debug` | Show quota calculations |
+| `gas` | Debug gas tank detection |
+| `scan` | Show raw item IDs (for mods) |
+| `intervals` | Show tick interval config |
 
 ## Project Structure
 
 ```
 VoidSmasherBaseManagementScript/
-├── .claude/skills/       # Claude Code guidance
-├── Docs/
-│   ├── LightGrid-Spec.md # Full specification
-│   └── checkpoints/      # Progress checkpoints
 ├── Source/
-│   └── LightGrid.cs      # The script
-└── README.md             # You are here
+│   └── LightGrid.cs       # The script
+├── Docs/
+│   ├── SETUP.md           # Installation guide
+│   ├── CONFIGURATION.md   # Config reference
+│   ├── TROUBLESHOOTING.md # Problem solving
+│   └── LightGrid-Spec.md  # Technical specification
+├── README.md              # You are here
+└── LICENSE                # Usage terms
 ```
-
-## License
-
-Do whatever you want with it. Just don't blame me if your base blows up.
 
 ## Author
 
-Harry (Glorktelligence) - 2026
+Harry (Chaos Admiral / Glorktelligence)
+
+## License
+
+See [LICENSE](LICENSE) for terms. Personal use and modification allowed with attribution.
