@@ -1,0 +1,108 @@
+[h1]LightGrid - Lightweight Base Management[/h1]
+
+A performance-focused alternative to heavy inventory managers. Designed for multiplayer servers where sim speed matters.
+
+[h2]Why LightGrid?[/h2]
+
+Tired of scripts that tank your server's sim speed? LightGrid takes a different approach:
+
+[list]
+[*] One job per tick - spreads work across frames, no lag spikes
+[*] Main grid only - ignores subgrid complexity
+[*] Block caching - finds blocks once, reuses forever
+[*] No LINQ - avoids garbage collection spikes
+[*] Configurable intervals - tune responsiveness vs CPU usage
+[/list]
+
+[b]Result:[/b] Smooth 1.0 sim speed even on busy multiplayer servers.
+
+[h2]Features[/h2]
+
+[b]Reactor Keeper[/b]
+Keeps reactors topped up with uranium from storage. Shows status on LCD and emoticon blocks. Warns when you need to mine.
+
+[b]Quota Manager[/b]
+Auto-produces components to target amounts. Detects missing materials. Disassembles excess automatically.
+
+[b]Dock & Yoink[/b]
+When a ship docks to your connector, automatically grabs all cargo from the visitor. Empties drills, welders, grinders too.
+
+[b]Inventory Display[/b]
+Shows everything you've got on an LCD. Categorized by type, auto-scaling font size.
+
+[b]Gas Keeper[/b]
+Monitors H2/O2 tank levels. Color-coded warnings on LCD and emoticon status.
+
+[b]Battery Status[/b]
+Tracks charge percentage and power flow. Shows time to full/empty estimates.
+
+[b]Gas Bottle Manager[/b]
+Automatically cycles H2/O2 bottles through generators for refilling. Loads bottles from cargo, fills them on a timer, ejects them back. Keeps generators stocked with ice. State machine prevents re-cycling already-filled bottles.
+
+[b]Sound Alerts[/b]
+Plays alarm when any system goes critical. Stops when recovered.
+
+[h2]Quick Start[/h2]
+
+1. Place a Programmable Block on your main grid
+2. Paste this script
+3. Run once - default config appears in Custom Data
+4. Edit Custom Data to match your block names
+5. Run "refresh" to apply
+
+[h2]Console Commands[/h2]
+
+[list]
+[*] [b]refresh[/b] - Re-scan all blocks after changes
+[*] [b]status[/b] - Show block counts
+[*] [b]debug[/b] - Show quota calculations
+[*] [b]gas[/b] - Debug gas tank detection
+[*] [b]scan[/b] - Show raw item IDs (for mods)
+[*] [b]bottles[/b] - Debug bottle manager state
+[*] [b]intervals[/b] - Show tick interval config
+[/list]
+
+[h2]Configuration[/h2]
+
+All settings are in the Programmable Block's Custom Data using INI format.
+
+Enable/disable modules, set block names, configure thresholds, add quota items - everything is customizable.
+
+[b]Supports modded components![/b] Run "scan" to see item IDs, then add them to your quota list.
+
+[h2]Block Naming[/h2]
+
+Default block names (change in Custom Data):
+[list]
+[*] "Reactor Status LCD" - Reactor status display
+[*] "Uranium Storage" - Block group for uranium cargo
+[*] "Quota Status LCD" - Quota status display
+[*] "Yoink Connector" - Connector for auto-transfer
+[*] "Main Storage" - Block group for general cargo
+[*] "Inventory List LCD" - Inventory display
+[*] "Gas Status LCD" - Gas status display
+[*] "Battery Status LCD" - Battery status display
+[*] "Bottle Status LCD" - Bottle manager status display
+[*] "LightGrid Alert Sound" - Sound block for alerts
+[/list]
+
+[h2]Performance Notes[/h2]
+
+LightGrid runs at Update10 (6 ticks/second). Each module runs on a separate tick, and intervals can be increased for less critical modules.
+
+Recommended intervals:
+[list]
+[*] DockYoink: 1 (fast docking response)
+[*] ReactorKeeper: 1-2
+[*] GasKeeper: 1-2
+[*] BatteryStatus: 1-2
+[*] GasBottleManager: 1 (bottle cycling needs consistent timing)
+[*] QuotaManager: 2-3 (crafting doesn't need real-time)
+[*] InventoryDisplay: 3-5 (visual only)
+[/list]
+
+[h2]Credits[/h2]
+
+Created by [b]VoidSmasher (Chaos Admiral)[/b]
+
+Free to use and modify. Credit appreciated if you share derivatives.
