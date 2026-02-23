@@ -73,7 +73,7 @@ VoidSmasherBaseManagementScript/
 
 ## Author
 
-Harry (Chaos Admiral / Glorktelligence)
+VoidSmasher (Chaos Admiral / Glorktelligence)
 
 ## License
 
